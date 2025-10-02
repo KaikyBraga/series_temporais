@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -42,6 +43,8 @@ ts.plot(title="Volume semanal")
 plt.xlabel("Semana")
 plt.ylabel("Volume")
 plt.tight_layout()
+# if output_dir does not exist, create it
+os.makedirs("./output", exist_ok=True)
 plt.savefig("./output/serie.png")
 plt.show()
 
