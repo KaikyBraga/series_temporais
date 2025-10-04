@@ -7,6 +7,8 @@ from typing import List, Tuple, Dict
 import json
 import statsmodels.api as sm
 from statsmodels.tsa.seasonal import STL
+from statsmodels.graphics.tsaplots import plot_acf
+from statsmodels.stats.diagnostic import acorr_ljungbox
 
 OUTDIR = Path("mlr_results")
 OUTDIR.mkdir(parents=True, exist_ok=True)
@@ -235,6 +237,10 @@ rows = []
 coef_tables = {}
 pred_test = test[["week_dt", "dlog_volume"]].copy()
 
+ljung = {
+    
+}
+
 for name, cols in models.items():
     y_tr, X_tr, names = design("dlog_volume", cols, train)
     res = fit_ols(y_tr, X_tr)
@@ -250,12 +256,16 @@ for name, cols in models.items():
     coef_df = pd.DataFrame({"term": names, "coef": res.params, "pvalue": res.pvalues})
     coef_tables[name] = coef_df
     pred_test[f"yhat_{name}"] = yhat_te
+    ljung[name] = acorr_ljungbox(res.resid, lags=[10], return_df=True)
+    
 
 # 6) Testes F de inclusão (significância conjunta)
 res_M0 = fit_ols(*design("dlog_volume", models["M0_intercept"], train)[:2])
 res_M1 = fit_ols(*design("dlog_volume", models["M1_time_trend"], train)[:2])
 res_M2 = fit_ols(*design("dlog_volume", models["M2_stl"], train)[:2])
 res_M3 = fit_ols(*design("dlog_volume", models["M3_time_plus_stl"], train)[:2])
+
+print(ljung)
 
 f_tests = {
     "time_trend_vs_intercept": {
