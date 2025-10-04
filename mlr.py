@@ -382,5 +382,5 @@ model_test = make_payload_entry(
 lista_treino = [real_train, model_train]
 lista_teste = [real_test,  model_test]
 
-print("#"*50)
-print(lista_treino)
+#print("#"*50)
+#print(lista_treino)
