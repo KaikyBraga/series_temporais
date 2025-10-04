@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Any
 
 import json
 import statsmodels.api as sm
@@ -209,6 +209,18 @@ def metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
     return {"RMSE": rmse, "MAE": mae}
 
 
+def make_payload_entry(nome: str,
+                       y_true: np.ndarray,
+                       y_pred: np.ndarray,
+                       ci_pairs: List[Tuple[float, float]]) -> Dict[str, Any]:
+    return {
+        "nome_modelo": nome,
+        "y_true": [float(v) for v in y_true],
+        "y_pred": [float(v) for v in y_pred],
+        "y_dist": [(float(a), float(b)) for a, b in ci_pairs],
+    }
+
+
 # 1) Load + transform
 df0 = load_series(Path("data.csv"))
 
@@ -323,3 +335,52 @@ plt.legend()
 plot_path = OUTDIR / f"{best_name}_test_fit.png"
 plt.tight_layout(); plt.savefig(plot_path, dpi=150); plt.close(fig)
 
+# 9) Reajusta o melhor modelo (já determinado) e obtém ICs 95%
+res_best = fit_ols(*design("dlog_volume", models[best_name], train)[:2])
+
+X_tr_best = design("dlog_volume", models[best_name], train)[1]
+pred_tr_sf = res_best.get_prediction(X_tr_best).summary_frame(alpha=0.05)
+
+X_te_best = design("dlog_volume", models[best_name], test)[1]
+pred_te_sf = res_best.get_prediction(X_te_best).summary_frame(alpha=0.05)
+
+# Dados reais (pred = true; ICs degenerados em (y,y))
+y_tr = train["dlog_volume"].to_numpy()
+y_te = test["dlog_volume"].to_numpy()
+
+real_train = make_payload_entry(
+    nome="Dados reais (treino)",
+    y_true=y_tr,
+    y_pred=y_tr,
+    ci_pairs=[(float(v), float(v)) for v in y_tr],
+)
+
+real_test = make_payload_entry(
+    nome="Dados reais (teste)",
+    y_true=y_te,
+    y_pred=y_te,
+    ci_pairs=[(float(v), float(v)) for v in y_te],
+)
+
+# 10) Melhor modelo (IC 95% para a média prevista)
+model_name_pt = "Modelo Intercepto" if best_name == "M0_intercept" else f"Modelo {best_name}"
+
+model_train = make_payload_entry(
+    nome=f"{model_name_pt} (treino)",
+    y_true=y_tr,
+    y_pred=pred_tr_sf["mean"].to_numpy(),
+    ci_pairs=list(map(tuple, pred_tr_sf[["mean_ci_lower", "mean_ci_upper"]].to_numpy())),
+)
+
+model_test = make_payload_entry(
+    nome=f"{model_name_pt} (teste)",
+    y_true=y_te,
+    y_pred=pred_te_sf["mean"].to_numpy(),
+    ci_pairs=list(map(tuple, pred_te_sf[["mean_ci_lower", "mean_ci_upper"]].to_numpy())),
+)
+
+lista_treino = [real_train, model_train]
+lista_teste = [real_test,  model_test]
+
+print("#"*50)
+print(lista_treino)
