@@ -7,7 +7,6 @@ from typing import List, Tuple, Dict, Any
 import json
 import statsmodels.api as sm
 from statsmodels.tsa.seasonal import STL
-from statsmodels.graphics.tsaplots import plot_acf
 from statsmodels.stats.diagnostic import acorr_ljungbox
 
 OUTDIR = Path("mlr_results")
@@ -209,15 +208,49 @@ def metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
     return {"RMSE": rmse, "MAE": mae}
 
 
+def generate_prediction_samples(res, X, n_samples=10):
+    """
+    Gera amostras da distribuição de previsão para cada linha em X.
+
+    Parameters
+    ----------
+    res : RegressionResults
+        Resultados da regressão.
+    X : np.ndarray
+        Matriz de design.
+    n_samples : int
+        Número de amostras a gerar por ponto.
+
+    Returns
+    -------
+    samples : List[List[float]]
+        Lista de listas, onde cada lista interna tem `n_samples` amostras para a previsão daquela linha.
+    """
+    # Obtém a previsão pontual
+    point_pred = res.predict(X)
+    # Obtém a variância da previsão da média
+    pred_results = res.get_prediction(X)
+    var_pred = pred_results.var_pred
+    # A variância total para uma nova observação é: variância residual + var_pred
+    var_total = res.mse_resid + var_pred
+    std_total = np.sqrt(var_total)
+    samples = []
+    for i in range(len(X)):
+        # Gera n_samples amostras de uma normal com média point_pred[i] e desvio std_total[i]
+        samp = np.random.normal(loc=point_pred[i], scale=std_total[i], size=n_samples)
+        samples.append(samp.tolist())
+    return samples
+
+
 def make_payload_entry(nome: str,
                        y_true: np.ndarray,
                        y_pred: np.ndarray,
-                       ci_pairs: List[Tuple[float, float]]) -> Dict[str, Any]:
+                       samples: List[List[float]]) -> Dict[str, Any]:
     return {
         "nome_modelo": nome,
         "y_true": [float(v) for v in y_true],
         "y_pred": [float(v) for v in y_pred],
-        "y_dist": [(float(a), float(b)) for a, b in ci_pairs],
+        "y_dist": samples,  # Agora é uma lista de listas de amostras
     }
 
 
@@ -335,49 +368,56 @@ plt.legend()
 plot_path = OUTDIR / f"{best_name}_test_fit.png"
 plt.tight_layout(); plt.savefig(plot_path, dpi=150); plt.close(fig)
 
-# 9) Reajusta o melhor modelo (já determinado) e obtém ICs 95%
+# 9) Reajusta o melhor modelo (já determinado) e obtém ICs 95% para a média (não usaremos mais, pois vamos usar amostras)
 res_best = fit_ols(*design("dlog_volume", models[best_name], train)[:2])
 
 X_tr_best = design("dlog_volume", models[best_name], train)[1]
-pred_tr_sf = res_best.get_prediction(X_tr_best).summary_frame(alpha=0.05)
-
 X_te_best = design("dlog_volume", models[best_name], test)[1]
-pred_te_sf = res_best.get_prediction(X_te_best).summary_frame(alpha=0.05)
 
-# Dados reais (pred = true; ICs degenerados em (y,y))
+# Gera amostras para treino e teste
+n_amostras = 50
+samples_tr = generate_prediction_samples(res_best, X_tr_best, n_amostras)
+samples_te = generate_prediction_samples(res_best, X_te_best, n_amostras)
+
+# Dados reais (pred = true; amostras degeneradas)
 y_tr = train["dlog_volume"].to_numpy()
 y_te = test["dlog_volume"].to_numpy()
+
+# Para dados reais, criamos amostras com 6 vezes o valor real
+samples_real_tr = [[float(y)] * n_amostras for y in y_tr]
+samples_real_te = [[float(y)] * n_amostras for y in y_te]
+
+# 10) Melhor modelo (IC 95% para a média prevista)
+model_name_pt = "Modelo Intercepto" if best_name == "M0_intercept" else f"Modelo {best_name}"
 
 real_train = make_payload_entry(
     nome="Dados reais (treino)",
     y_true=y_tr,
     y_pred=y_tr,
-    ci_pairs=[(float(v), float(v)) for v in y_tr],
+    samples=samples_real_tr,
 )
 
 real_test = make_payload_entry(
     nome="Dados reais (teste)",
     y_true=y_te,
     y_pred=y_te,
-    ci_pairs=[(float(v), float(v)) for v in y_te],
+    samples=samples_real_te,
 )
-
-# 10) Melhor modelo (IC 95% para a média prevista)
-model_name_pt = "Modelo Intercepto" if best_name == "M0_intercept" else f"Modelo {best_name}"
 
 model_train = make_payload_entry(
     nome=f"{model_name_pt} (treino)",
     y_true=y_tr,
-    y_pred=pred_tr_sf["mean"].to_numpy(),
-    ci_pairs=list(map(tuple, pred_tr_sf[["mean_ci_lower", "mean_ci_upper"]].to_numpy())),
+    y_pred=res_best.predict(X_tr_best),
+    samples=samples_tr,
 )
 
 model_test = make_payload_entry(
     nome=f"{model_name_pt} (teste)",
     y_true=y_te,
-    y_pred=pred_te_sf["mean"].to_numpy(),
-    ci_pairs=list(map(tuple, pred_te_sf[["mean_ci_lower", "mean_ci_upper"]].to_numpy())),
+    y_pred=res_best.predict(X_te_best),
+    samples=samples_te,
 )
+
 
 lista_treino = [real_train, model_train]
 lista_teste = [real_test,  model_test]
